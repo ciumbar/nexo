@@ -1,0 +1,12 @@
+{
+  "actorSpecification": 1,
+  "name": "nexo-qualified-local-leads",
+  "title": "Nexo Qualified Local Leads",
+  "description": "Encuentra pymes locales y las puntúa según encaje para chatbots, automatizaciones y recepcionista IA.",
+  "version": "0.1",
+  "buildTag": "latest",
+  "env": {
+    "NODE_OPTIONS": "--max-old-space-size=2048"
+  },
+  "dockerfile": "./Dockerfile"
+}
