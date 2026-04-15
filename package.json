@@ -1,0 +1,19 @@
+{
+  "name": "nexo-qualified-local-leads",
+  "version": "0.1.0",
+  "description": "Apify actor para descubrir y puntuar pymes locales con alta probabilidad de necesitar chatbots, automatizaciones y recepcionista IA.",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "check": "node --check src/main.js"
+  },
+  "dependencies": {
+    "apify": "^3.4.1",
+    "crawlee": "^3.15.0",
+    "csv-stringify": "^6.5.1"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  }
+}
