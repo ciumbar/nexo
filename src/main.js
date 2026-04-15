@@ -3,57 +3,37 @@ import { CheerioCrawler, Dataset, KeyValueStore, RequestQueue } from 'crawlee';
 import { stringify } from 'csv-stringify/sync';
 
 const DEFAULT_INPUT = {
-    cities: ['Madrid', 'Barcelona', 'Valencia', 'Sevilla', 'Málaga'],
-    sectors: [
-        'clínica dental',
-        'clínica estética',
-        'fisioterapia',
-        'veterinaria',
-        'barbería',
-        'peluquería',
-        'restaurante',
-        'inmobiliaria',
-    ],
+    cities: ['Madrid', 'Barcelona', 'Valencia', 'Sevilla', 'Málaga', 'Bilbao'],
     country: 'España',
+    agencyTypes: [
+        'agencia marketing',
+        'agencia marketing digital',
+        'agencia publicidad',
+        'agencia creativa',
+        'agencia seo',
+        'agencia branding',
+        'agencia diseño web',
+        'agencia social media',
+        'agencia performance',
+    ],
+    customQueries: [],
     maxLeads: 200,
-    maxDomainsPerQuery: 15,
-    maxPagesPerDomain: 3,
-    minScore: 55,
+    maxDomainsPerQuery: 12,
+    maxPagesPerDomain: 4,
+    minScore: 52,
     includeDirectories: false,
     saveCsv: true,
-    searchEngine: 'bing',
-    customQueries: [],
 };
 
 const BLOCKED_HOSTS = [
     'facebook.com', 'instagram.com', 'linkedin.com', 'tiktok.com', 'youtube.com', 'x.com', 'twitter.com',
-    'tripadvisor.', 'justeat.', 'glovoapp.', 'ubereats.', 'thefork.', 'idealista.com', 'fotocasa.',
-    'google.com', 'google.es', 'bing.com', 'yelp.', 'pagesjaunes.', 'paginegialle.', 'wikipedia.org',
-    'reddit.com', 'cronoshare.com', 'trustpilot.com', 'pinterest.', 'milanuncios.com', 'wallapop.com',
+    'google.com', 'google.es', 'bing.com', 'wikipedia.org', 'reddit.com', 'pinterest.', 'trustpilot.com',
 ];
 
 const DIRECTORY_HOST_HINTS = [
-    'páginas amarillas', 'paginas amarillas', 'qdq', 'axesor', 'empresite', 'informa', 'cylex', 'yalwa',
-    'infobel', 'hotfrog', 'vulka', 'opendi', 'guía', 'guia', 'directorio', 'directory', 'listing',
+    'sortlist', 'clutch', 'designrush', 'semrush', 'goodfirms', 'manifest', 'yelp', 'qdq',
+    'páginas amarillas', 'paginas amarillas', 'guía', 'guia', 'directory', 'directorio', 'listing',
 ];
-
-const SECTOR_PATTERNS = {
-    'clínica dental': [/dent/i, /odont/i, /implante/i, /ortodon/i],
-    'clínica estética': [/est[ée]tica/i, /medicina est[ée]tica/i, /depil/i, /botox/i],
-    'fisioterapia': [/fisio/i, /rehabil/i, /osteopat/i],
-    'veterinaria': [/veterin/i, /mascota/i, /animal/i],
-    'barbería': [/barber/i, /barba/i],
-    'peluquería': [/peluquer/i, /cabello/i, /capilar/i],
-    'restaurante': [/restaurante/i, /carta/i, /reserv/i, /men[uú]/i],
-    'inmobiliaria': [/inmobiliaria/i, /pisos/i, /vivienda/i, /alquiler/i, /venta/i],
-    'hotel': [/hotel/i, /habitaciones/i, /booking/i, /reserv/i],
-    'academia': [/academia/i, /cursos/i, /formaci[oó]n/i, /clases/i],
-    'taller': [/taller/i, /mec[aá]nic/i, /revisi[oó]n/i, /veh[ií]culo/i],
-};
-
-const HIGH_FIT_SECTORS = new Set([
-    'clínica dental', 'clínica estética', 'fisioterapia', 'veterinaria', 'inmobiliaria',
-]);
 
 await Actor.init();
 
@@ -64,7 +44,6 @@ const dataset = await Dataset.open();
 const kv = await KeyValueStore.open();
 
 const domainState = new Map();
-const finalLeads = [];
 
 function cleanText(value = '') {
     return value.replace(/\s+/g, ' ').trim();
@@ -108,31 +87,33 @@ function extractEmails(text) {
 
 function extractPhones(text) {
     const matches = text.match(/(?:\+34|0034|34)?[\s.-]?(?:\(?\d{2,3}\)?[\s.-]?)?(?:\d[\s.-]?){8,12}/g) ?? [];
-    return unique(matches.map((m) => cleanText(m)).filter((m) => m.replace(/\D/g, '').length >= 9 && m.replace(/\D/g, '').length <= 13));
+    return unique(matches.map((m) => cleanText(m)).filter((m) => {
+        const digits = m.replace(/\D/g, '');
+        return digits.length >= 9 && digits.length <= 13;
+    }));
 }
 
 function detectPlatformSignals(html, text) {
-    const signals = [];
     const hay = `${html}\n${text}`.toLowerCase();
+    const signals = [];
     if (hay.includes('wp-content') || hay.includes('wordpress')) signals.push('wordpress');
     if (hay.includes('elementor')) signals.push('elementor');
-    if (hay.includes('woocommerce')) signals.push('woocommerce');
-    if (hay.includes('shopify')) signals.push('shopify');
-    if (hay.includes('wix.com') || hay.includes('wix-image')) signals.push('wix');
-    if (hay.includes('webflow')) signals.push('webflow');
+    if (hay.includes('hubspot')) signals.push('hubspot');
     if (hay.includes('calendly')) signals.push('calendly');
-    if (hay.includes('treatwell')) signals.push('treatwell');
-    if (hay.includes('booksy')) signals.push('booksy');
+    if (hay.includes('salesforce')) signals.push('salesforce');
+    if (hay.includes('activecampaign')) signals.push('activecampaign');
+    if (hay.includes('mailchimp')) signals.push('mailchimp');
     return unique(signals);
 }
 
 function buildSearchQueries() {
     const queries = [];
-    for (const sector of input.sectors) {
+    for (const agencyType of input.agencyTypes) {
         for (const city of input.cities) {
-            queries.push(`${sector} ${city} ${input.country} sitio web`);
-            queries.push(`${sector} ${city} contacto`);
-            queries.push(`${sector} ${city} whatsapp`);
+            queries.push(`${agencyType} ${city} ${input.country}`);
+            queries.push(`${agencyType} ${city} equipo`);
+            queries.push(`${agencyType} ${city} ceo`);
+            queries.push(`${agencyType} ${city} nosotros`);
         }
     }
     for (const customQuery of input.customQueries) queries.push(customQuery);
@@ -143,125 +124,16 @@ function buildBingUrl(query) {
     return `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20&setlang=es-ES`;
 }
 
-function detectSector(text, fallbackSector) {
+function inferAgencyType(text, fallback = null) {
     const hay = text.toLowerCase();
-    for (const [sector, patterns] of Object.entries(SECTOR_PATTERNS)) {
-        if (patterns.some((regex) => regex.test(hay))) return sector;
-    }
-    return fallbackSector || 'desconocido';
-}
-
-function recommendedPitch(sector, flags) {
-    if (['clínica dental', 'clínica estética', 'fisioterapia', 'veterinaria'].includes(sector)) {
-        return 'Recepcionista IA para citas, preguntas frecuentes, WhatsApp y captación fuera de horario.';
-    }
-    if (['barbería', 'peluquería'].includes(sector)) {
-        return 'Bot de WhatsApp + agenda + reactivación automática de clientes.';
-    }
-    if (sector === 'restaurante') {
-        return 'Chatbot para reservas, horarios, menús, eventos y atención por WhatsApp.';
-    }
-    if (sector === 'inmobiliaria') {
-        return 'Asistente IA para filtrar leads, responder portales y automatizar seguimiento.';
-    }
-    if (flags.hasBooking) {
-        return 'Automatización alrededor de reservas, recordatorios y no-shows.';
-    }
-    return 'Chatbot + automatización comercial para captación, respuesta inmediata y ahorro operativo.';
-}
-
-function scoreLead(state) {
-    let score = 0;
-    const reasons = [];
-    const missingOpportunities = [];
-
-    if (HIGH_FIT_SECTORS.has(state.sector)) {
-        score += 24;
-        reasons.push(`Sector prioritario para NexaIA: ${state.sector}`);
-    } else if (state.sector !== 'desconocido') {
-        score += 15;
-        reasons.push(`Sector compatible: ${state.sector}`);
-    }
-
-    if (state.city) {
-        score += 8;
-        reasons.push(`Negocio local identificado en ${state.city}`);
-    }
-
-    if (state.phones.length) {
-        score += 10;
-        reasons.push('Teléfono público detectado');
-    }
-
-    if (state.emails.length) {
-        score += 8;
-        reasons.push('Email público detectado');
-    }
-
-    if (state.hasContactForm) {
-        score += 6;
-        reasons.push('Formulario de contacto detectado');
-    }
-
-    if (state.hasWhatsapp) {
-        score += 4;
-        reasons.push('Usa WhatsApp en captación');
-    } else {
-        score += 8;
-        reasons.push('No se detecta WhatsApp visible');
-        missingOpportunities.push('Atención por WhatsApp');
-    }
-
-    if (state.hasChatWidget) {
-        score -= 6;
-        reasons.push('Ya tiene chat/widget visible');
-    } else {
-        score += 10;
-        reasons.push('No se detecta chatbot actual');
-        missingOpportunities.push('Chatbot web');
-    }
-
-    if (state.hasBooking) {
-        score += 3;
-        reasons.push('Tiene reservas/citas online que se pueden automatizar');
-    } else if (['clínica dental', 'clínica estética', 'fisioterapia', 'veterinaria', 'barbería', 'peluquería', 'restaurante'].includes(state.sector)) {
-        score += 10;
-        reasons.push('No se detecta motor de reserva/cita visible');
-        missingOpportunities.push('Reservas o citas automáticas');
-    }
-
-    if (state.platformSignals.includes('wordpress') || state.platformSignals.includes('elementor')) {
-        score += 6;
-        reasons.push('Stack fácil de integrar (WordPress/Elementor)');
-    }
-
-    if (state.pagesVisited <= 2) {
-        score += 2;
-    }
-
-    if (looksLikeDirectory(state.host, `${state.title} ${state.description}`)) {
-        score -= 50;
-        reasons.push('Parece directorio, no negocio final');
-    }
-
-    if (/agencia|marketing|software|consultor/i.test(`${state.title} ${state.textBlob}`)) {
-        score -= 18;
-        reasons.push('Probable competencia o negocio no objetivo');
-    }
-
-    if (/tienda online|ecommerce|shop/i.test(state.textBlob) && state.sector === 'desconocido') {
-        score -= 10;
-        reasons.push('Parece ecommerce genérico');
-    }
-
-    const priority = score >= 75 ? 'A' : score >= 60 ? 'B' : score >= 45 ? 'C' : 'D';
-
-    return {
-        score: Math.max(0, Math.min(100, score)),
-        priority,
-        reasons: unique(reasons),
-        missingOpportunities: unique(missingOpportunities),
-    };
+    if (/seo|sem/i.test(hay)) return 'agencia seo';
+    if (/branding|marca/i.test(hay)) return 'agencia branding';
+    if (/social media|redes sociales|community manager/i.test(hay)) return 'agencia social media';
+    if (/publicidad|ads|ppc|performance/i.test(hay)) return 'agencia performance';
+    if (/diseño web|web design|desarrollo web/i.test(hay)) return 'agencia diseño web';
+    if (/creativa|creative/i.test(hay)) return 'agencia creativa';
+    if (/marketing digital|marketing/i.test(hay)) return 'agencia marketing digital';
+    return fallback || 'agencia';
 }
 
 function inferBusinessName($, url) {
@@ -280,6 +152,158 @@ function inferCity(text, cities) {
     return cities.find((city) => hay.includes(city.toLowerCase())) || null;
 }
 
+function extractTeamSize(text) {
+    const compact = text.replace(/\s+/g, ' ');
+    const patterns = [
+        /\b(?:equipo|team|plantilla|somos)\s+de\s+(\d{1,3})\s+(?:personas|profesionales|empleados|especialistas|talentos)\b/i,
+        /\bmás de\s+(\d{1,3})\s+(?:personas|profesionales|empleados|especialistas)\b/i,
+        /\bmore than\s+(\d{1,3})\s+(?:people|employees|specialists)\b/i,
+        /\b(\d{1,3})\+\s*(?:personas|people|empleados|profesionales)\b/i,
+    ];
+    for (const regex of patterns) {
+        const match = compact.match(regex);
+        if (match) return Number(match[1]);
+    }
+    return null;
+}
+
+function countTeamCards($) {
+    const selectors = [
+        '[class*="team"] [class*="member"]',
+        '[class*="equipo"] [class*="item"]',
+        '[class*="staff"] [class*="item"]',
+        '[class*="team"] article',
+        '.team-member',
+        '.member',
+    ];
+    let maxCount = 0;
+    for (const selector of selectors) {
+        const count = $(selector).length;
+        if (count > maxCount) maxCount = count;
+    }
+    return maxCount;
+}
+
+function extractDecisionMakers(text) {
+    const compact = text.replace(/\s+/g, ' ');
+    const results = [];
+    const patterns = [
+        /\b([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,2})\s*[,|\-–]\s*(CEO|Founder|Co-Founder|Managing Director|Director General|Socio Director|Founder & CEO)\b/g,
+        /\b(CEO|Founder|Co-Founder|Managing Director|Director General|Socio Director|Founder & CEO)\s*[:\-–]?\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+){1,2})\b/g,
+    ];
+
+    for (const regex of patterns) {
+        for (const match of compact.matchAll(regex)) {
+            const first = cleanText(match[1] || '');
+            const second = cleanText(match[2] || '');
+            const maybeName = first.split(' ').length >= 2 && !/CEO|Founder|Director|Socio/i.test(first) ? first : second;
+            const maybeRole = maybeName === first ? second : first;
+            if (maybeName && maybeRole) results.push(`${maybeName} (${maybeRole})`);
+        }
+    }
+
+    return unique(results).slice(0, 10);
+}
+
+function scoreLead(state) {
+    let score = 0;
+    const reasons = [];
+    const missingData = [];
+
+    score += 18;
+    reasons.push('Es una agencia, alineada con el target actual');
+
+    if (state.city) {
+        score += 6;
+        reasons.push(`Ubicación detectada: ${state.city}`);
+    }
+
+    if (state.phones.length) {
+        score += 8;
+        reasons.push('Teléfono público disponible');
+    }
+
+    if (state.emails.length) {
+        score += 10;
+        reasons.push('Email público disponible');
+    } else {
+        missingData.push('Email directo');
+    }
+
+    if (state.hasContactForm) {
+        score += 4;
+        reasons.push('Formulario de contacto detectado');
+    }
+
+    if (state.decisionMakers.length) {
+        score += 18;
+        reasons.push('Se detectó decisor o liderazgo visible');
+    } else {
+        missingData.push('CEO/founder identificable');
+    }
+
+    if (state.teamSizeExact !== null) {
+        if (state.teamSizeExact >= 15) {
+            score += 24;
+            reasons.push(`Equipo declarado de ${state.teamSizeExact} personas`);
+        } else {
+            score -= 18;
+            reasons.push(`Equipo declarado inferior al umbral (${state.teamSizeExact})`);
+        }
+    } else if (state.teamPageCount >= 15) {
+        score += 20;
+        reasons.push(`Página de equipo con al menos ${state.teamPageCount} perfiles/elementos`);
+    } else if (state.teamPageCount >= 8) {
+        score += 10;
+        reasons.push(`Página de equipo relativamente amplia (${state.teamPageCount} elementos)`);
+        missingData.push('Confirmar si superan 15 personas');
+    } else {
+        missingData.push('Tamaño del equipo');
+    }
+
+    if (state.hasHiringSignals) {
+        score += 8;
+        reasons.push('Tiene señales de contratación/crecimiento');
+    }
+
+    if (state.hasCaseStudies) {
+        score += 6;
+        reasons.push('Tiene casos de éxito/portfolio, señal de agencia consolidada');
+    }
+
+    if (state.platformSignals.includes('hubspot') || state.platformSignals.includes('salesforce')) {
+        score += 4;
+        reasons.push('Usa stack comercial/CRM visible');
+    }
+
+    if (looksLikeDirectory(state.host, `${state.title} ${state.description}`)) {
+        score -= 50;
+        reasons.push('Parece directorio, no agencia final');
+    }
+
+    if (/freelance|autónomo|solopreneur/i.test(state.textBlob)) {
+        score -= 22;
+        reasons.push('Parece perfil individual o micro negocio');
+    }
+
+    const scoreClamped = Math.max(0, Math.min(100, score));
+    const priority = scoreClamped >= 80 ? 'A' : scoreClamped >= 65 ? 'B' : scoreClamped >= 50 ? 'C' : 'D';
+
+    return {
+        score: scoreClamped,
+        priority,
+        reasons: unique(reasons),
+        missingData: unique(missingData),
+    };
+}
+
+function recommendedPitch(state) {
+    if ((state.teamSizeExact ?? 0) >= 15 || state.teamPageCount >= 15) {
+        return 'Automatización interna para agencias medianas: cualificación de leads, seguimiento comercial, reporting y asistente operativo para account/project managers.';
+    }
+    return 'Propuesta enfocada en automatizar captación, follow-up comercial y operaciones internas de agencia.';
+}
+
 for (const query of buildSearchQueries()) {
     await requestQueue.addRequest({
         url: buildBingUrl(query),
@@ -296,63 +320,64 @@ const crawler = new CheerioCrawler({
     maxRequestRetries: 2,
     useSessionPool: true,
     sessionPoolOptions: { maxPoolSize: 30 },
-    preNavigationHooks: [
-        async ({ request, session }) => {
-            log.debug(`Fetching ${request.url} with session ${session.id}`);
-        },
-    ],
     async requestHandler({ request, $, body, crawler }) {
         const { label } = request.userData;
 
         if (label === 'SEARCH') {
             const query = request.userData.query;
             const seenHosts = new Set();
+
             $('li.b_algo').each((index, el) => {
                 if (index >= input.maxDomainsPerQuery) return;
+
                 const href = $(el).find('h2 a').attr('href');
                 const title = cleanText($(el).find('h2').text());
                 const desc = cleanText($(el).find('.b_caption p').text());
                 const normalized = normalizeUrl(href);
                 if (!normalized) return;
+
                 const host = getHost(normalized);
                 if (!host || isBlockedHost(host)) return;
                 if (!input.includeDirectories && looksLikeDirectory(host, `${title} ${desc}`)) return;
                 if (seenHosts.has(host)) return;
                 seenHosts.add(host);
 
-                domainState.set(host, {
-                    host,
-                    seedQuery: query,
-                    sourceSearchTitle: title,
-                    sourceSearchDescription: desc,
-                    website: `https://${host}`,
-                    pagesVisited: 0,
-                    urlsVisited: [],
-                    emails: [],
-                    phones: [],
-                    hasWhatsapp: false,
-                    hasChatWidget: false,
-                    hasBooking: false,
-                    hasContactForm: false,
-                    platformSignals: [],
-                    title: title,
-                    description: desc,
-                    businessName: null,
-                    city: null,
-                    sectorHint: input.sectors.find((s) => query.toLowerCase().includes(s.toLowerCase())) || null,
-                    sector: null,
-                    textBlob: '',
-                    contactPages: [],
-                });
+                if (!domainState.has(host)) {
+                    domainState.set(host, {
+                        host,
+                        website: `https://${host}`,
+                        seedQueries: [],
+                        pagesVisited: 0,
+                        urlsVisited: [],
+                        emails: [],
+                        phones: [],
+                        platformSignals: [],
+                        title,
+                        description: desc,
+                        businessName: null,
+                        city: null,
+                        agencyTypeHint: input.agencyTypes.find((s) => query.toLowerCase().includes(s.toLowerCase())) || null,
+                        agencyType: null,
+                        textBlob: '',
+                        hasContactForm: false,
+                        hasHiringSignals: false,
+                        hasCaseStudies: false,
+                        teamSizeExact: null,
+                        teamPageCount: 0,
+                        decisionMakers: [],
+                    });
+                }
 
-                crawler.addRequests([
-                    {
-                        url: normalized,
-                        userData: { label: 'SITE', host, pageType: 'home' },
-                        uniqueKey: `site:${host}:${normalized}`,
-                    },
-                ]);
+                const state = domainState.get(host);
+                state.seedQueries = unique([...state.seedQueries, query]);
+
+                crawler.addRequests([{
+                    url: normalized,
+                    userData: { label: 'SITE', host, pageType: 'home' },
+                    uniqueKey: `site:${host}:${normalized}`,
+                }]);
             });
+
             return;
         }
 
@@ -370,18 +395,24 @@ const crawler = new CheerioCrawler({
             state.urlsVisited.push(pageUrl);
             state.businessName ??= inferBusinessName($, pageUrl);
             state.city ??= inferCity(text, input.cities);
-            state.sector ??= detectSector(`${state.title} ${state.description} ${text}`, state.sectorHint);
+            state.agencyType ??= inferAgencyType(`${state.title} ${state.description} ${text}`, state.agencyTypeHint);
             state.emails = unique([...state.emails, ...extractEmails(html), ...extractEmails(text)]);
             state.phones = unique([...state.phones, ...extractPhones(text)]);
             state.platformSignals = unique([...state.platformSignals, ...detectPlatformSignals(html, text)]);
-            state.textBlob = cleanText(`${state.textBlob} ${text}`).slice(0, 25000);
-            state.hasWhatsapp ||= /wa\.me|api\.whatsapp\.com|whatsapp/i.test(html);
-            state.hasChatWidget ||= /tidio|smartsupp|intercom|drift|hubspot.*chat|tawk|livechat|zendesk/i.test(html);
-            state.hasBooking ||= /booksy|treatwell|calendly|booking|reservas|reserva ahora|cita online|book now/i.test(text + html);
+            state.textBlob = cleanText(`${state.textBlob} ${text}`).slice(0, 30000);
             state.hasContactForm ||= $('form').length > 0;
-            if (/contacto|contact|ubicaci[oó]n|aviso legal|pol[ií]tica de privacidad|empresa/i.test(pageUrl)) {
-                state.contactPages.push(pageUrl);
+            state.hasHiringSignals ||= /trabaja con nosotros|join our team|we are hiring|vacantes|empleo|careers/i.test(text);
+            state.hasCaseStudies ||= /casos de éxito|case stud|portfolio|clientes|proyectos/i.test(text);
+
+            const detectedTeamSize = extractTeamSize(text);
+            if (detectedTeamSize && (!state.teamSizeExact || detectedTeamSize > state.teamSizeExact)) {
+                state.teamSizeExact = detectedTeamSize;
             }
+
+            const teamCards = countTeamCards($);
+            if (teamCards > state.teamPageCount) state.teamPageCount = teamCards;
+
+            state.decisionMakers = unique([...state.decisionMakers, ...extractDecisionMakers(text)]);
 
             if (state.pagesVisited < input.maxPagesPerDomain) {
                 const candidateLinks = new Set();
@@ -389,12 +420,16 @@ const crawler = new CheerioCrawler({
                     const href = $(a).attr('href');
                     const anchor = cleanText($(a).text());
                     if (!href) return;
+
                     try {
                         const abs = new URL(href, pageUrl).toString();
                         const absHost = getHost(abs);
                         if (absHost !== host) return;
-                        if (!/contact|contacto|servicios|faq|reserv|cita|about|nosotros|equipo|clinic|menu|carta|tratamiento/i.test(`${abs} ${anchor}`)) return;
                         if (state.urlsVisited.includes(abs)) return;
+
+                        const navText = `${abs} ${anchor}`;
+                        if (!/contact|contacto|about|nosotros|equipo|team|people|agencia|portfolio|clientes|casos|case|work|hiring|careers|empleo/i.test(navText)) return;
+
                         candidateLinks.add(abs);
                     } catch {
                     }
@@ -411,34 +446,6 @@ const crawler = new CheerioCrawler({
                     added += 1;
                 }
             }
-
-            const scoreData = scoreLead(state);
-            const result = {
-                businessName: state.businessName,
-                sector: state.sector,
-                city: state.city,
-                website: state.website,
-                host: state.host,
-                sourceQuery: state.seedQuery,
-                emails: state.emails,
-                phones: state.phones,
-                hasWhatsapp: state.hasWhatsapp,
-                hasChatWidget: state.hasChatWidget,
-                hasBooking: state.hasBooking,
-                hasContactForm: state.hasContactForm,
-                platformSignals: state.platformSignals,
-                pagesVisited: state.pagesVisited,
-                pages: state.urlsVisited,
-                contactPages: state.contactPages,
-                score: scoreData.score,
-                priority: scoreData.priority,
-                reasons: scoreData.reasons,
-                missingOpportunities: scoreData.missingOpportunities,
-                recommendedPitch: recommendedPitch(state.sector, state),
-                scrapedAt: new Date().toISOString(),
-            };
-
-            domainState.set(host, { ...state, ...result });
         }
     },
     failedRequestHandler({ request, error }) {
@@ -448,61 +455,67 @@ const crawler = new CheerioCrawler({
 
 await crawler.run();
 
+const finalLeads = [];
+
 for (const lead of domainState.values()) {
     if (!lead.businessName || !lead.website) continue;
-    if (lead.score < input.minScore) continue;
+
+    const scoreData = scoreLead(lead);
+    if (scoreData.score < input.minScore) continue;
+
     finalLeads.push({
         businessName: lead.businessName,
-        sector: lead.sector,
+        agencyType: lead.agencyType,
         city: lead.city,
         website: lead.website,
         host: lead.host,
-        sourceQuery: lead.sourceQuery,
+        sourceQueries: lead.seedQueries,
         emails: lead.emails,
         phones: lead.phones,
-        hasWhatsapp: lead.hasWhatsapp,
-        hasChatWidget: lead.hasChatWidget,
-        hasBooking: lead.hasBooking,
         hasContactForm: lead.hasContactForm,
+        hasHiringSignals: lead.hasHiringSignals,
+        hasCaseStudies: lead.hasCaseStudies,
         platformSignals: lead.platformSignals,
+        teamSizeExact: lead.teamSizeExact,
+        teamPageCount: lead.teamPageCount,
+        decisionMakers: lead.decisionMakers,
         pagesVisited: lead.pagesVisited,
-        pages: lead.pages,
-        contactPages: lead.contactPages,
-        score: lead.score,
-        priority: lead.priority,
-        reasons: lead.reasons,
-        missingOpportunities: lead.missingOpportunities,
-        recommendedPitch: lead.recommendedPitch,
-        scrapedAt: lead.scrapedAt,
+        pages: lead.urlsVisited,
+        score: scoreData.score,
+        priority: scoreData.priority,
+        reasons: scoreData.reasons,
+        missingData: scoreData.missingData,
+        recommendedPitch: recommendedPitch(lead),
+        scrapedAt: new Date().toISOString(),
     });
 }
 
 const sortedLeads = finalLeads.sort((a, b) => b.score - a.score).slice(0, input.maxLeads);
+
 if (sortedLeads.length) await dataset.pushData(sortedLeads);
 
 if (input.saveCsv && sortedLeads.length) {
     const csv = stringify(sortedLeads.map((lead) => ({
         ...lead,
+        sourceQueries: lead.sourceQueries.join(' | '),
         emails: lead.emails.join(' | '),
         phones: lead.phones.join(' | '),
         platformSignals: lead.platformSignals.join(' | '),
+        decisionMakers: lead.decisionMakers.join(' | '),
         reasons: lead.reasons.join(' | '),
-        missingOpportunities: lead.missingOpportunities.join(' | '),
+        missingData: lead.missingData.join(' | '),
         pages: lead.pages.join(' | '),
-        contactPages: lead.contactPages.join(' | '),
     })), { header: true });
     await kv.setValue('QUALIFIED_LEADS.csv', csv, { contentType: 'text/csv' });
 }
 
 await Actor.setValue('SUMMARY', {
+    target: 'CEO/founders de agencias con 15+ personas',
     totalQualified: sortedLeads.length,
     topPriority: sortedLeads.filter((l) => l.priority === 'A').length,
-    avgScore: sortedLeads.length ? Math.round(sortedLeads.reduce((acc, item) => acc + item.score, 0) / sortedLeads.length) : 0,
-    bestSectors: Object.entries(sortedLeads.reduce((acc, item) => {
-        acc[item.sector] = (acc[item.sector] || 0) + 1;
-        return acc;
-    }, {})).sort((a, b) => b[1] - a[1]).slice(0, 10),
+    withDecisionMaker: sortedLeads.filter((l) => l.decisionMakers.length > 0).length,
+    withTeam15PlusEvidence: sortedLeads.filter((l) => (l.teamSizeExact ?? 0) >= 15 || l.teamPageCount >= 15).length,
 });
 
-log.info(`Qualified leads: ${sortedLeads.length}`);
+log.info(`Qualified agency leads: ${sortedLeads.length}`);
 await Actor.exit();
