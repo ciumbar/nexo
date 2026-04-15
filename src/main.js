@@ -16,19 +16,18 @@ const DEFAULT_INPUT = {
     ],
     country: 'España',
     maxLeads: 200,
-    maxDomainsPerQuery: 15,
+    maxDomainsPerQuery: 12,
     maxPagesPerDomain: 3,
-    minScore: 55,
+    minScore: 45,
     includeDirectories: false,
     saveCsv: true,
-    searchEngine: 'bing',
     customQueries: [],
 };
 
 const BLOCKED_HOSTS = [
     'facebook.com', 'instagram.com', 'linkedin.com', 'tiktok.com', 'youtube.com', 'x.com', 'twitter.com',
     'tripadvisor.', 'justeat.', 'glovoapp.', 'ubereats.', 'thefork.', 'idealista.com', 'fotocasa.',
-    'google.com', 'google.es', 'bing.com', 'yelp.', 'pagesjaunes.', 'paginegialle.', 'wikipedia.org',
+    'google.com', 'google.es', 'bing.com', 'duckduckgo.com', 'yelp.', 'pagesjaunes.', 'paginegialle.', 'wikipedia.org',
     'reddit.com', 'cronoshare.com', 'trustpilot.com', 'pinterest.', 'milanuncios.com', 'wallapop.com',
 ];
 
@@ -130,7 +129,7 @@ function buildSearchQueries() {
     const queries = [];
     for (const sector of input.sectors) {
         for (const city of input.cities) {
-            queries.push(`${sector} ${city} ${input.country} sitio web`);
+            queries.push(`${sector} ${city} ${input.country}`);
             queries.push(`${sector} ${city} contacto`);
             queries.push(`${sector} ${city} whatsapp`);
         }
@@ -139,8 +138,8 @@ function buildSearchQueries() {
     return unique(queries);
 }
 
-function buildBingUrl(query) {
-    return `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20&setlang=es-ES`;
+function buildDuckUrl(query) {
+    return `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 }
 
 function detectSector(text, fallbackSector) {
@@ -235,9 +234,7 @@ function scoreLead(state) {
         reasons.push('Stack fácil de integrar (WordPress/Elementor)');
     }
 
-    if (state.pagesVisited <= 2) {
-        score += 2;
-    }
+    if (state.pagesVisited <= 2) score += 2;
 
     if (looksLikeDirectory(state.host, `${state.title} ${state.description}`)) {
         score -= 50;
@@ -282,7 +279,7 @@ function inferCity(text, cities) {
 
 for (const query of buildSearchQueries()) {
     await requestQueue.addRequest({
-        url: buildBingUrl(query),
+        url: buildDuckUrl(query),
         userData: { label: 'SEARCH', query },
         uniqueKey: `search:${query}`,
     });
@@ -296,11 +293,6 @@ const crawler = new CheerioCrawler({
     maxRequestRetries: 2,
     useSessionPool: true,
     sessionPoolOptions: { maxPoolSize: 30 },
-    preNavigationHooks: [
-        async ({ request, session }) => {
-            log.debug(`Fetching ${request.url} with session ${session.id}`);
-        },
-    ],
     async requestHandler({ request, $, body }) {
         const { label } = request.userData;
 
@@ -309,11 +301,11 @@ const crawler = new CheerioCrawler({
             const seenHosts = new Set();
             const followRequests = [];
 
-            $('li.b_algo').each((index, el) => {
+            $('.result').each((index, el) => {
                 if (index >= input.maxDomainsPerQuery) return;
-                const href = $(el).find('h2 a').attr('href');
-                const title = cleanText($(el).find('h2').text());
-                const desc = cleanText($(el).find('.b_caption p').text());
+                const href = $(el).find('.result__title a').attr('href') || $(el).find('a.result__a').attr('href');
+                const title = cleanText($(el).find('.result__title').text() || $(el).find('a.result__a').text());
+                const desc = cleanText($(el).find('.result__snippet').text());
                 const normalized = normalizeUrl(href);
                 if (!normalized) return;
                 const host = getHost(normalized);
@@ -322,30 +314,32 @@ const crawler = new CheerioCrawler({
                 if (seenHosts.has(host)) return;
                 seenHosts.add(host);
 
-                domainState.set(host, {
-                    host,
-                    seedQuery: query,
-                    sourceSearchTitle: title,
-                    sourceSearchDescription: desc,
-                    website: `https://${host}`,
-                    pagesVisited: 0,
-                    urlsVisited: [],
-                    emails: [],
-                    phones: [],
-                    hasWhatsapp: false,
-                    hasChatWidget: false,
-                    hasBooking: false,
-                    hasContactForm: false,
-                    platformSignals: [],
-                    title,
-                    description: desc,
-                    businessName: null,
-                    city: null,
-                    sectorHint: input.sectors.find((s) => query.toLowerCase().includes(s.toLowerCase())) || null,
-                    sector: null,
-                    textBlob: '',
-                    contactPages: [],
-                });
+                if (!domainState.has(host)) {
+                    domainState.set(host, {
+                        host,
+                        seedQuery: query,
+                        sourceSearchTitle: title,
+                        sourceSearchDescription: desc,
+                        website: `https://${host}`,
+                        pagesVisited: 0,
+                        urlsVisited: [],
+                        emails: [],
+                        phones: [],
+                        hasWhatsapp: false,
+                        hasChatWidget: false,
+                        hasBooking: false,
+                        hasContactForm: false,
+                        platformSignals: [],
+                        title,
+                        description: desc,
+                        businessName: null,
+                        city: null,
+                        sectorHint: input.sectors.find((s) => query.toLowerCase().includes(s.toLowerCase())) || null,
+                        sector: null,
+                        textBlob: '',
+                        contactPages: [],
+                    });
+                }
 
                 followRequests.push({
                     url: normalized,
@@ -354,8 +348,10 @@ const crawler = new CheerioCrawler({
                 });
             });
 
-            if (followRequests.length) {
-                await requestQueue.addRequests(followRequests, { forefront: false });
+            if (!followRequests.length) {
+                log.warning(`Search '${query}' no devolvió dominios parseables`);
+            } else {
+                await requestQueue.addRequests(followRequests);
                 log.info(`Search '${query}' -> ${followRequests.length} dominios añadidos`);
             }
             return;
@@ -384,9 +380,7 @@ const crawler = new CheerioCrawler({
             state.hasChatWidget ||= /tidio|smartsupp|intercom|drift|hubspot.*chat|tawk|livechat|zendesk/i.test(html);
             state.hasBooking ||= /booksy|treatwell|calendly|booking|reservas|reserva ahora|cita online|book now/i.test(text + html);
             state.hasContactForm ||= $('form').length > 0;
-            if (/contacto|contact|ubicaci[oó]n|aviso legal|pol[ií]tica de privacidad|empresa/i.test(pageUrl)) {
-                state.contactPages.push(pageUrl);
-            }
+            if (/contacto|contact|ubicaci[oó]n|aviso legal|pol[ií]tica de privacidad|empresa/i.test(pageUrl)) state.contactPages.push(pageUrl);
 
             if (state.pagesVisited < input.maxPagesPerDomain) {
                 const candidateLinks = [];
@@ -405,42 +399,30 @@ const crawler = new CheerioCrawler({
                             userData: { label: 'SITE', host, pageType: 'detail' },
                             uniqueKey: `site:${host}:${abs}`,
                         });
-                    } catch {
-                    }
+                    } catch {}
                 });
 
-                const deduped = unique(candidateLinks.map((item) => JSON.stringify(item))).map((item) => JSON.parse(item));
+                const deduped = [];
+                const seen = new Set();
+                for (const item of candidateLinks) {
+                    if (seen.has(item.uniqueKey)) continue;
+                    seen.add(item.uniqueKey);
+                    deduped.push(item);
+                }
                 const limited = deduped.slice(0, Math.max(0, input.maxPagesPerDomain - state.pagesVisited));
-                if (limited.length) await requestQueue.addRequests(limited, { forefront: false });
+                if (limited.length) await requestQueue.addRequests(limited);
             }
 
             const scoreData = scoreLead(state);
-            const result = {
-                businessName: state.businessName,
-                sector: state.sector,
-                city: state.city,
-                website: state.website,
-                host: state.host,
-                sourceQuery: state.seedQuery,
-                emails: state.emails,
-                phones: state.phones,
-                hasWhatsapp: state.hasWhatsapp,
-                hasChatWidget: state.hasChatWidget,
-                hasBooking: state.hasBooking,
-                hasContactForm: state.hasContactForm,
-                platformSignals: state.platformSignals,
-                pagesVisited: state.pagesVisited,
-                pages: state.urlsVisited,
-                contactPages: state.contactPages,
+            domainState.set(host, {
+                ...state,
                 score: scoreData.score,
                 priority: scoreData.priority,
                 reasons: scoreData.reasons,
                 missingOpportunities: scoreData.missingOpportunities,
                 recommendedPitch: recommendedPitch(state.sector, state),
                 scrapedAt: new Date().toISOString(),
-            };
-
-            domainState.set(host, { ...state, ...result });
+            });
         }
     },
     failedRequestHandler({ request, error }) {
@@ -452,14 +434,14 @@ await crawler.run();
 
 for (const lead of domainState.values()) {
     if (!lead.businessName || !lead.website) continue;
-    if (lead.score < input.minScore) continue;
+    if ((lead.score ?? 0) < input.minScore) continue;
     finalLeads.push({
         businessName: lead.businessName,
         sector: lead.sector,
         city: lead.city,
         website: lead.website,
         host: lead.host,
-        sourceQuery: lead.sourceQuery,
+        sourceQuery: lead.seedQuery,
         emails: lead.emails,
         phones: lead.phones,
         hasWhatsapp: lead.hasWhatsapp,
@@ -468,7 +450,7 @@ for (const lead of domainState.values()) {
         hasContactForm: lead.hasContactForm,
         platformSignals: lead.platformSignals,
         pagesVisited: lead.pagesVisited,
-        pages: lead.pages,
+        pages: lead.urlsVisited,
         contactPages: lead.contactPages,
         score: lead.score,
         priority: lead.priority,
