@@ -301,12 +301,14 @@ const crawler = new CheerioCrawler({
             log.debug(`Fetching ${request.url} with session ${session.id}`);
         },
     ],
-    async requestHandler({ request, $, body, crawler }) {
+    async requestHandler({ request, $, body }) {
         const { label } = request.userData;
 
         if (label === 'SEARCH') {
             const query = request.userData.query;
             const seenHosts = new Set();
+            const followRequests = [];
+
             $('li.b_algo').each((index, el) => {
                 if (index >= input.maxDomainsPerQuery) return;
                 const href = $(el).find('h2 a').attr('href');
@@ -335,7 +337,7 @@ const crawler = new CheerioCrawler({
                     hasBooking: false,
                     hasContactForm: false,
                     platformSignals: [],
-                    title: title,
+                    title,
                     description: desc,
                     businessName: null,
                     city: null,
@@ -345,14 +347,17 @@ const crawler = new CheerioCrawler({
                     contactPages: [],
                 });
 
-                crawler.addRequests([
-                    {
-                        url: normalized,
-                        userData: { label: 'SITE', host, pageType: 'home' },
-                        uniqueKey: `site:${host}:${normalized}`,
-                    },
-                ]);
+                followRequests.push({
+                    url: normalized,
+                    userData: { label: 'SITE', host, pageType: 'home' },
+                    uniqueKey: `site:${host}:${normalized}`,
+                });
             });
+
+            if (followRequests.length) {
+                await requestQueue.addRequests(followRequests, { forefront: false });
+                log.info(`Search '${query}' -> ${followRequests.length} dominios añadidos`);
+            }
             return;
         }
 
@@ -384,7 +389,7 @@ const crawler = new CheerioCrawler({
             }
 
             if (state.pagesVisited < input.maxPagesPerDomain) {
-                const candidateLinks = new Set();
+                const candidateLinks = [];
                 $('a[href]').each((_, a) => {
                     const href = $(a).attr('href');
                     const anchor = cleanText($(a).text());
@@ -395,21 +400,18 @@ const crawler = new CheerioCrawler({
                         if (absHost !== host) return;
                         if (!/contact|contacto|servicios|faq|reserv|cita|about|nosotros|equipo|clinic|menu|carta|tratamiento/i.test(`${abs} ${anchor}`)) return;
                         if (state.urlsVisited.includes(abs)) return;
-                        candidateLinks.add(abs);
+                        candidateLinks.push({
+                            url: abs,
+                            userData: { label: 'SITE', host, pageType: 'detail' },
+                            uniqueKey: `site:${host}:${abs}`,
+                        });
                     } catch {
                     }
                 });
 
-                let added = 0;
-                for (const url of candidateLinks) {
-                    if (added >= input.maxPagesPerDomain - state.pagesVisited) break;
-                    await requestQueue.addRequest({
-                        url,
-                        userData: { label: 'SITE', host, pageType: 'detail' },
-                        uniqueKey: `site:${host}:${url}`,
-                    });
-                    added += 1;
-                }
+                const deduped = unique(candidateLinks.map((item) => JSON.stringify(item))).map((item) => JSON.parse(item));
+                const limited = deduped.slice(0, Math.max(0, input.maxPagesPerDomain - state.pagesVisited));
+                if (limited.length) await requestQueue.addRequests(limited, { forefront: false });
             }
 
             const scoreData = scoreLead(state);
